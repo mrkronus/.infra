@@ -1,0 +1,90 @@
+# -----------------------------------------------------------------------------
+# Addon Release Tools
+#
+# PATCH DAY CHECKLIST (the only things you need to change each patch):
+#   1. Update game_version to the new patch number (e.g. "12.1.0")
+#   2. Update interface_versions with the numbers Blizzard published
+#      Find them at: https://wowpedia.fandom.com/wiki/TOC_format
+#   3. Set dry_run: false when you're ready to actually apply changes
+#   4. Run update-toc.bat  (or run-all.bat to do both steps at once)
+#   5. Set dry_run: true again when done (safety default for next time)
+#
+# RUN ORDER:
+#   Step 1 -- update-toc.py    bumps versions, updates .toc files, commits + pushes
+#   Step 2 -- push-release.py  creates and pushes git tags to trigger release pipeline
+#   Or run both at once with run-all.bat
+# -----------------------------------------------------------------------------
+
+# Base config
+# -----------------------------------------------------------------------------
+
+# Set to true to preview all changes without writing any files or running git.
+# Always test with dry_run: true first after editing game_version or interface_versions.
+dry_run: true
+
+# The X.Y.Z patch version string. Used to build the addon version number
+# and to detect whether an addon is already up to date.
+game_version: "12.0.5"
+
+# All interface numbers Blizzard published for this patch.
+# The highest one is used in changelog entries and up-to-date checks.
+interface_versions:
+  - 120000
+  - 120001
+  - 120005
+
+
+# Git
+# -----------------------------------------------------------------------------
+
+# The branch to commit and push TOC changes to.
+# Usually "main" or "master" -- check your repos if unsure.
+git_branch: "main"
+
+# The git remote to push to. Almost always "origin" unless you've renamed it.
+git_remote: "origin"
+
+# The prefix used when creating release tags.
+# Combined with the version to form the tag name, e.g. "release-12.0.5.9"
+# Your release pipeline (CurseForge, Wago, GitHub Actions, etc.) should be
+# configured to trigger on tags matching this prefix pattern.
+release_prefix: "release"
+
+
+# Templates
+# -----------------------------------------------------------------------------
+
+# Template for the git commit message when TOC changes are committed.
+# Available placeholders:
+#   {version}       -- the new full version string, e.g. 12.0.5.9
+#   {game_version}  -- the game version from this config, e.g. 12.0.5
+commit_message_template: "Bumping TOC for latest patch ({game_version})"
+
+# Template for the entry prepended to each addon's CHANGELOG.md.
+# Available placeholders:
+#   {interface}  -- the highest interface number in interface_versions
+changelog_entry_template: "Bumping TOC for latest patch ({interface})"
+
+
+# Addons
+# -----------------------------------------------------------------------------
+
+# Each name must match the addon's folder name exactly.
+# Folders are expected one level above this tools/ directory.
+# Example structure:
+#   WoW/
+#     Kache/ <-- addon repo
+#     KLib/  <-- addon repo
+#     tools/ <-- this config lives here
+addons:
+  - Kache
+  - KAuctions
+  - KAutomark
+  - KDebug
+  - KForgetsEverything
+  - Kharacter
+  - KLib
+  - KMod
+  - Kollector
+  - Konfigurations
+  - KRaidSkipTracker

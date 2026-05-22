@@ -1,0 +1,199 @@
+name: WoW Addon Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      build_on_push:
+        description: "Build a dev pre-release on every push to main"
+        type: boolean
+        default: true
+      auto_tag:
+        description: "Derive tag from TOC version instead of expecting a pushed tag (for auto-updated addons)"
+        type: boolean
+        default: false
+      run_tests:
+        description: "Run tests before packaging"
+        type: boolean
+        default: false
+      test_command:
+        description: "Command to run tests"
+        type: string
+        default: "./run_tests.sh"
+      curseforge_project_id:
+        description: "CurseForge project ID. If set, uploads to CurseForge on official releases."
+        type: string
+        default: ""
+      keep_releases:
+        description: "Number of official releases to keep"
+        type: number
+        default: 5
+      keep_prereleases:
+        description: "Number of pre-releases to keep"
+        type: number
+        default: 5
+      main_branch:
+        description: "Primary branch name"
+        type: string
+        default: "main"
+      prerelease_label:
+        description: "Label suffix for dev build tags"
+        type: string
+        default: "dev"
+    secrets:
+      CF_API_KEY:
+        description: "CurseForge API token (required if curseforge_project_id is set)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Dev build: runs on push to main (if build_on_push is true)
+  # Skipped entirely for auto_tag repos (they use the release job instead)
+  # -----------------------------------------------------------------------
+  dev-build:
+    name: Dev Build
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', inputs.main_branch) &&
+      inputs.build_on_push == true &&
+      inputs.auto_tag == false
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Tests
+        if: inputs.run_tests == true
+        run: ${{ inputs.test_command }}
+
+      - name: Derive Dev Version
+        id: version
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0.0")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          DEV_VERSION="${LAST_TAG}-${{ inputs.prerelease_label }}.${SHORT_SHA}"
+          DEV_TAG="${LAST_TAG}-${{ inputs.prerelease_label }}.${SHORT_SHA}"
+          echo "version=${DEV_VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${DEV_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Patch TOC Version
+        run: |
+          sed -i "s/^## Version:.*/## Version: ${{ steps.version.outputs.version }}/" *.toc
+
+      - name: Package Addon
+        uses: BigWigsMods/packager@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Pre-Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: .release/*.zip
+          generate_release_notes: true
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prune Old Pre-Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          releases=$(gh release list --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease == true) | .tagName')
+          count=0
+          for tag in $releases; do
+            count=$((count + 1))
+            if [ $count -gt ${{ inputs.keep_prereleases }} ]; then
+              gh release delete "$tag" --yes --cleanup-tag
+            fi
+          done
+
+  # -----------------------------------------------------------------------
+  # Release build: runs on pushed tag, or on push to main for auto_tag repos
+  # -----------------------------------------------------------------------
+  release:
+    name: Release Build
+    runs-on: ubuntu-latest
+    if: |
+      startsWith(github.ref, 'refs/tags/') ||
+      (
+        inputs.auto_tag == true &&
+        github.event_name == 'push' &&
+        github.ref == format('refs/heads/{0}', inputs.main_branch)
+      )
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Tests
+        if: inputs.run_tests == true
+        run: ${{ inputs.test_command }}
+
+      - name: Derive Auto Tag (auto_tag repos only)
+        id: auto_version
+        if: inputs.auto_tag == true
+        run: |
+          VERSION=$(grep -i "^## Version:" *.toc | head -1 | awk -F': ' '{print $2}' | tr -d '[:space:]')
+          TAG="v${VERSION}"
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            TAG="v${VERSION}-$(git rev-parse --short HEAD)"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Resolve Version
+        id: version
+        run: |
+          if [ "${{ inputs.auto_tag }}" = "true" ]; then
+            echo "tag=${{ steps.auto_version.outputs.tag }}" >> $GITHUB_OUTPUT
+            echo "version=${{ steps.auto_version.outputs.version }}" >> $GITHUB_OUTPUT
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+            echo "version=${TAG}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Patch TOC Version
+        run: |
+          sed -i "s/^## Version:.*/## Version: ${{ steps.version.outputs.version }}/" *.toc
+
+      - name: Package Addon
+        uses: BigWigsMods/packager@v2
+        id: packager
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CF_API_KEY: ${{ inputs.curseforge_project_id != '' && secrets.CF_API_KEY || '' }}
+        with:
+          args: ${{ inputs.curseforge_project_id != '' && format('-p {0}', inputs.curseforge_project_id) || '' }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: .release/*.zip
+          generate_release_notes: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prune Old Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          releases=$(gh release list --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease == false) | .tagName')
+          count=0
+          for tag in $releases; do
+            count=$((count + 1))
+            if [ $count -gt ${{ inputs.keep_releases }} ]; then
+              gh release delete "$tag" --yes --cleanup-tag
+            fi
+          done

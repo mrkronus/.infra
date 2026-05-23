@@ -130,7 +130,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -176,7 +176,7 @@ jobs:
           args: ${{ inputs.curseforge_project_id != '' && format('-p {0}', inputs.curseforge_project_id) || '' }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           files: .release/*.zip

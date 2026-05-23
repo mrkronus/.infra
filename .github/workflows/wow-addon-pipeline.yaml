@@ -7,10 +7,6 @@ on:
         description: "Build a dev pre-release on every push to main"
         type: boolean
         default: true
-      auto_tag:
-        description: "Derive tag from TOC version instead of expecting a pushed tag (for auto-updated addons)"
-        type: boolean
-        default: false
       run_tests:
         description: "Run tests before packaging"
         type: boolean
@@ -46,7 +42,6 @@ permissions:
 jobs:
   # -----------------------------------------------------------------------
   # Dev build: runs on push to main (if build_on_push is true)
-  # Skipped entirely for auto_tag repos (they use the release job instead)
   # -----------------------------------------------------------------------
   dev-build:
     name: Dev Build
@@ -54,8 +49,7 @@ jobs:
     if: |
       github.event_name == 'push' &&
       github.ref == format('refs/heads/{0}', inputs.main_branch) &&
-      inputs.build_on_push == true &&
-      inputs.auto_tag == false
+      inputs.build_on_push == true
 
     steps:
       - name: Checkout Code
@@ -114,18 +108,12 @@ jobs:
           done
 
   # -----------------------------------------------------------------------
-  # Release build: runs on pushed tag, or on push to main for auto_tag repos
+  # Release build: runs on pushed tag
   # -----------------------------------------------------------------------
   release:
     name: Release Build
     runs-on: ubuntu-latest
-    if: |
-      startsWith(github.ref, 'refs/tags/') ||
-      (
-        inputs.auto_tag == true &&
-        github.event_name == 'push' &&
-        github.ref == format('refs/heads/{0}', inputs.main_branch)
-      )
+    if: startsWith(github.ref, 'refs/tags/')
 
     steps:
       - name: Checkout Code
@@ -141,39 +129,16 @@ jobs:
         if: inputs.run_tests == true
         run: ${{ inputs.test_command }}
 
-      - name: Derive Auto Tag
-        id: auto_version
-        if: inputs.auto_tag == true
-        run: |
-          GAME_VERSION=$(grep -i "^## Version:" *.toc | head -1 | awk -F': ' '{print $2}' | tr -d '[:space:]')
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          TAG="${GAME_VERSION}-${SHORT_SHA}"
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "version=${TAG}" >> $GITHUB_OUTPUT
-
       - name: Resolve Version
         id: version
         run: |
-          if [ "${{ inputs.auto_tag }}" = "true" ]; then
-            echo "tag=${{ steps.auto_version.outputs.tag }}" >> $GITHUB_OUTPUT
-            echo "version=${{ steps.auto_version.outputs.version }}" >> $GITHUB_OUTPUT
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-            echo "tag=${TAG}" >> $GITHUB_OUTPUT
-            echo "version=${TAG}" >> $GITHUB_OUTPUT
-          fi
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Patch TOC Version
         run: |
           sed -i "s/^## Version:.*/## Version: ${{ steps.version.outputs.version }}/" *.toc
-
-      - name: Push Tag
-        if: inputs.auto_tag == true
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git tag ${{ steps.version.outputs.tag }}
-          git push origin ${{ steps.version.outputs.tag }} || true
 
       - name: Package Addon
         uses: BigWigsMods/packager@v2

@@ -11,6 +11,10 @@ on:
         description: "Derive tag from TOC version instead of expecting a pushed tag (for auto-updated addons)"
         type: boolean
         default: false
+      auto_tag_scheme:
+        description: "Version scheme for auto_tag repos: 'sha' (last-tag + commit sha) or 'date' (game-version + today's date)"
+        type: string
+        default: "sha"
       run_tests:
         description: "Run tests before packaging"
         type: boolean
@@ -66,6 +70,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Install Test Dependencies
+        if: inputs.run_tests == true
+        run: sudo apt-get install -y lua5.1
 
       - name: Run Tests
         if: inputs.run_tests == true
@@ -134,19 +142,31 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Test Dependencies
+        if: inputs.run_tests == true
+        run: sudo apt-get install -y lua5.1
+
       - name: Run Tests
         if: inputs.run_tests == true
         run: ${{ inputs.test_command }}
 
-      - name: Derive Auto Tag (auto_tag repos only)
-        id: auto_version
-        if: inputs.auto_tag == true
+      - name: Derive Auto Tag - SHA scheme
+        id: auto_version_sha
+        if: inputs.auto_tag == true && inputs.auto_tag_scheme == 'sha'
         run: |
-          VERSION=$(grep -i "^## Version:" *.toc | head -1 | awk -F': ' '{print $2}' | tr -d '[:space:]')
-          TAG="v${VERSION}"
-          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
-            TAG="v${VERSION}-$(git rev-parse --short HEAD)"
-          fi
+          LAST_TAG=$(git describe --tags --abbrev=0 --match "[0-9]*.[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || echo "0.0.0.0")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TAG="${LAST_TAG}-${{ inputs.prerelease_label }}.${SHORT_SHA}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Derive Auto Tag - Date scheme
+        id: auto_version_date
+        if: inputs.auto_tag == true && inputs.auto_tag_scheme == 'date'
+        run: |
+          GAME_VERSION=$(grep -i "^## Version:" *.toc | head -1 | awk -F': ' '{print $2}' | tr -d '[:space:]' | cut -d'.' -f1-3)
+          TODAY=$(date +%Y%m%d)
+          TAG="${GAME_VERSION}.${TODAY}"
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "version=${TAG}" >> $GITHUB_OUTPUT
 
@@ -154,8 +174,13 @@ jobs:
         id: version
         run: |
           if [ "${{ inputs.auto_tag }}" = "true" ]; then
-            echo "tag=${{ steps.auto_version.outputs.tag }}" >> $GITHUB_OUTPUT
-            echo "version=${{ steps.auto_version.outputs.version }}" >> $GITHUB_OUTPUT
+            if [ "${{ inputs.auto_tag_scheme }}" = "date" ]; then
+              echo "tag=${{ steps.auto_version_date.outputs.tag }}" >> $GITHUB_OUTPUT
+              echo "version=${{ steps.auto_version_date.outputs.version }}" >> $GITHUB_OUTPUT
+            else
+              echo "tag=${{ steps.auto_version_sha.outputs.tag }}" >> $GITHUB_OUTPUT
+              echo "version=${{ steps.auto_version_sha.outputs.version }}" >> $GITHUB_OUTPUT
+            fi
           else
             TAG="${GITHUB_REF#refs/tags/}"
             echo "tag=${TAG}" >> $GITHUB_OUTPUT
